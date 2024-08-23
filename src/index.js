@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import express, { json } from "express";
 import cors from "cors";
 import multer from "multer";
+import cookieParser from "cookie-parser";
 
 // Import dotenv
 import dotenv from "dotenv";
@@ -14,7 +15,7 @@ const __filename = fileURLToPath(import.meta.url);
 export const __dirname = dirname(__filename);
 const uploadDir = join(__dirname, "uploads");
 
-// Multer file upload configurations.
+// Multer config.
 import { v4 } from "uuid";
 const storage = multer.diskStorage({
   destination: function (_req, _file, cb) {
@@ -24,7 +25,7 @@ const storage = multer.diskStorage({
     cb(null, v4() + "-" + file.originalname);
   },
 });
-export const upload = multer({ storage: storage });
+const upload = multer({ storage: storage });
 
 // Initialize app
 const app = express();
@@ -32,21 +33,22 @@ const app = express();
 // Configure middlewares
 app.use(cors());
 app.use(json());
+app.use(cookieParser());
 app.use("/uploads", express.static(join(__dirname, "uploads")));
 
-// Routes
-
-// Import all routes
+// ROUTES
+// -> Import routes
 import { users } from "./routes/users.js";
 import { products } from "./routes/products.js";
 import { orders } from "./routes/Orders.js";
 import { admin } from "./routes/admin.js";
 
-// Set routes
+// -> Set routes
 app.use("/users", users);
 app.use("/products", products);
 app.use("/orders", orders);
 app.use("/admin", upload.single("image"), admin);
+
 // Bad request handler
 app.use((_req, res) => {
   res.send("<h1>Error 404</h1>");
