@@ -8,7 +8,7 @@ combos.get("/", async (_req, res) => {
     "select * from combos inner join comboProducts on combos.id = comboProducts.id"
   );
   rows.forEach((row) => {
-    row.image = `http://localhost:8080/uploads/${row.image}`;
+    row.image = `https://nearly-touched-mosquito.ngrok-free.app/uploads/${row.image}`;
   });
   return res.status(200).json(...rows);
 });
