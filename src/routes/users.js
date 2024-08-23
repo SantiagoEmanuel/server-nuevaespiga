@@ -1,142 +1,200 @@
 import { Router } from "express";
-import {
-  createUserWithEmailAndPassword,
-  sendEmailVerification,
-  signInWithEmailAndPassword,
-} from "firebase/auth";
 import { v1 } from "uuid";
 import { db } from "../api/database.js";
-import { auth } from "../api/firebase.js";
+import { validateUser } from "../schema/users.js";
+import jwt from "jsonwebtoken";
+import bcrypt from "bcrypt";
 
 export const users = Router();
 
 users.post("/create", async (req, res) => {
-  const data = req.body;
+  const {
+    name,
+    email,
+    password,
+    passwordConfirmation,
+    phone,
+    addressStreet,
+    addressNumber,
+    cart,
+  } = req.body;
 
-  data.email = data.email.toLocaleLowerCase();
-  data.username = data.username.toLocaleLowerCase();
+  if (password !== passwordConfirmation)
+    return res.status(400).send({ error: "Passwords don't match!" });
 
-  const result = await createUserWithEmailAndPassword(
-    auth,
-    data.email,
-    data.password
-  )
-    .then(async (userCredential) => {
-      // Send verification email to current user.
-      sendEmailVerification(auth.currentUser);
+  const result = validateUser({
+    name,
+    email,
+    password,
+    phone,
+    addressStreet,
+    addressNumber,
+  });
 
-      // Create user info in database.
-      await db.execute({
-        sql: "insert into users (id, username, fullName, email, phone, address) values (?, ?, ?, ?, ?, ?)",
-        args: [
-          userCredential.user.uid,
-          data.username,
-          data.fullName,
-          data.email,
-          data.phone,
-          data.address,
-        ],
-      });
+  if (!result.success) {
+    return res.status(400).send({ error: result.error.message });
+  }
 
-      try {
-        await db.execute({
-          sql: "insert into carts (id, cart, userId) values (?, ?, ?)",
-          args: [
-            v1(),
-            data.cart ? JSON.stringify(data.cart) : JSON.stringify([]),
-            userCredential.user.uid,
-          ],
-        });
-      } catch (error) {
-        console.log(error);
-      }
+  const passwordHashed = bcrypt.hashSync(password, 10);
+  const id = v1();
 
-      return res
-        .send({
-          message: "User created successfully!",
-          data: {
-            id: userCredential.user.uid,
-            username: data.username,
-            fullName: data.fullName,
-            email: data.email,
-            phone: data.phone,
-            address: data.address,
-            emailVerified: userCredential.user.emailVerified,
-            cart: data.cart ? data.cart : [],
-            orders: [],
-            status: "user",
-          },
-        })
-        .status(201);
+  const token = jwt.sign(
+    {
+      id: id,
+      name: name,
+      email: email,
+      phone: phone,
+      addressStreet: addressStreet,
+      addressNumber: addressNumber,
+    },
+    process.env.SECRET_KEY
+  );
+
+  console.log(cart);
+
+  await db.execute({
+    sql: "insert into users (id, name, email, password, phone, addressStreet, addressNumber, cart) values (?, ?, ?, ?, ?, ?, ?, ?)",
+    args: [
+      id,
+      name,
+      email,
+      passwordHashed,
+      phone,
+      addressStreet,
+      addressNumber,
+      JSON.stringify(cart || []),
+    ],
+  });
+
+  return res
+    .cookie("auth_token", token, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      maxAge: 1000 * 60 * 60 * 24 * 7,
     })
-    .catch((error) => {
-      return res
-        .send({
-          message: "Error creating user!",
-          error: error.message,
-        })
-        .status(400);
+    .send({
+      message: "User created successfully!",
+      data: {
+        id: id,
+        name: name,
+        email: email,
+        phone: phone,
+        addressStreet: addressStreet,
+        addressNumber: addressNumber,
+        cart: cart || [],
+        orders: [],
+      },
     });
-
-  return result;
 });
 
 users.post("/login", async (req, res) => {
-  const data = req.body;
-  data.email = data.email.toLocaleLowerCase();
+  const { email, password } = req.body;
 
-  const result = await signInWithEmailAndPassword(
-    auth,
-    data.email,
-    data.password
-  )
-    .then(async (userCredential) => {
-      const { rows: user } = await db.execute({
-        sql: "select * from users inner join carts on carts.userId = users.id where users.id = ?",
-        args: [userCredential.user.uid],
-      });
+  const { rows: user } = await db.execute({
+    sql: "select * from users where email = ?",
+    args: [email],
+  });
 
-      const { rows: userOrders } = await db.execute({
-        sql: "select * from orders where userId = ?",
-        args: [userCredential.user.uid],
-      });
+  if (!user.length) return res.status(400).send({ error: "User not found" });
 
-      userOrders.map((order) => {
-        order.products = JSON.parse(order.products);
-        order.userInfo = JSON.parse(order.userInfo);
-      });
+  const result = bcrypt.compareSync(password, user[0].password);
 
-      return res
-        .send({
-          message: "User logged in successfully!",
-          data: {
-            ...user[0],
-            orders: userOrders,
-          },
-        })
-        .status(200);
+  if (!result) return res.status(400).send({ error: "Invalid password" });
+
+  const { rows: orders } = await db.execute({
+    sql: "select * from orders where userId = ?",
+    args: [user[0].id],
+  });
+
+  const token = jwt.sign(
+    {
+      id: user[0].id,
+      name: user[0].name,
+      email: user[0].email,
+      phone: user[0].phone,
+      addressStreet: user[0].addressStreet,
+      addressNumber: user[0].addressNumber,
+      cart: user[0].cart || [],
+      orders: orders || [],
+    },
+    process.env.SECRET_KEY
+  );
+
+  return res
+    .cookie("auth_token", token, {
+      httpOnly: true,
+      sameSite: "strict",
+      secure: process.env.NODE_ENV === "production",
+      maxAge: 1000 * 60 * 60 * 24 * 7,
     })
-    .catch(() => {
-      return res
-        .send({
-          message: "Error to login!",
-          error: "Wrong credentials!",
-        })
-        .status(400);
+    .send({
+      message: "User logged in successfully",
+      data: {
+        id: user[0].id,
+        name: user[0].name,
+        email: user[0].email,
+        phone: user[0].phone,
+        addressStreet: user[0].addressStreet,
+        addressNumber: user[0].addressNumber,
+        cart: user[0].cart || [],
+        orders: orders || [],
+        status: user[0].status,
+      },
+      token,
+    });
+});
+
+users.post("/login/refresh", async (req, res) => {
+  const token = req.cookies.auth_token;
+  const authToken = req.body.token;
+  if (!token && !authToken)
+    return res.status(400).send({ error: "No token found" });
+
+  try {
+    const data = jwt.verify(authToken, process.env.SECRET_KEY);
+
+    const { rows } = await db.execute({
+      sql: "select * from users where id = ?",
+      args: [data.id],
     });
 
-  return result;
+    if (rows.length < 1)
+      return res.status(400).send({ error: "Invalid token" });
+
+    const { rows: orders } = await db.execute({
+      sql: "select * from orders where userId = ?",
+      args: [rows[0].id],
+    });
+
+    return res.status(200).send({
+      message: "User logged in successfully",
+      data: {
+        id: data.id,
+        name: rows[0].name,
+        email: rows[0].email,
+        phone: rows[0].phone,
+        addressStreet: rows[0].addressStreet,
+        addressNumber: rows[0].addressNumber,
+        cart: rows[0].cart || [],
+        orders: orders || [],
+        status: rows[0].status,
+      },
+    });
+  } catch (error) {
+    return res.status(400).send({ error: "Token expired" });
+  }
 });
 
 users.post("/logout", async (req, res) => {
-  const { cart, userId } = req.body;
+  const { cart, id } = req.body;
 
   await db.execute({
-    sql: "update carts set cart = ? where userId = ?",
-    args: [JSON.stringify(cart || []), userId],
+    sql: "update users set cart = ? where id = ?",
+    args: [JSON.stringify(cart), id],
   });
 
-  return res.status(200).json({
+  return res.clearCookie("auth_token").send({
     message: "User logged out successfully",
   });
 });
