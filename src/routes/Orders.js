@@ -5,40 +5,50 @@ import { preference } from "../api/mercadopago.js";
 export const orders = Router();
 
 orders.post("/create", async (req, res) => {
-  const data = req.body;
+  const { orderInfo, orderProducts, preferenceId } = req.body;
   const orderData = {
-    ...data.orderInfo,
-    products: data.orderProducts,
-    preferenceId: data.preferenceId || null,
+    ...orderInfo,
+    products: orderProducts,
+    preferenceId: preferenceId || null,
   };
-  orderData.userInfo = JSON.stringify(orderData.userInfo);
-  orderData.products = JSON.stringify(orderData.products);
-  console.log(orderData);
+
+  const products = orderData.products;
+
+  products.map((product) => {
+    db.execute({
+      sql: "update products set stock = stock - ? where id = ?",
+      args: [product.quantity, product.id],
+    });
+  });
+
   db.execute({
-    sql: "insert into orders (id, products, total, userId, userInfo, toWithdrawnOn, paymentMethod, isPaid, orderWithdrawn, preferenceId ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    sql: "insert into orders (id, products, total, userId, userInfo, withdrawnOn, paymentMethod, paid, orderWithdrawn, preferenceId ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     args: [
       orderData.id,
-      orderData.products,
+      JSON.stringify(orderData.products),
       orderData.total,
       orderData.userId,
-      orderData.userInfo,
-      orderData.toWithdrawnOn,
+      JSON.stringify(orderData.userInfo),
+      orderData.withdrawnOn,
       orderData.paymentMethod,
-      orderData.isPaid,
+      orderData.paid,
       orderData.orderWithdrawn,
       orderData.preferenceId,
     ],
   })
     .then((result) => {
-      console.log(result);
+      if (result.rowsAffected > 0) {
+        return res.status(201).send({
+          message: "Order created successfully",
+        });
+      }
     })
     .catch((error) => {
-      console.log(error);
+      return res.status(500).json({
+        message: "Error creating order",
+        error: error,
+      });
     });
-
-  res.status(201).json({
-    message: "Order created successfully",
-  });
 });
 
 orders.post("/create/preference", async (req, res) => {
@@ -63,11 +73,9 @@ orders.post("/create/preference", async (req, res) => {
         },
         back_urls: {
           success:
-            "https://defend-nigeria-cord-saint.trycloudflare.com/orders/update/paymentStatus/success",
+            "https://nearly-touched-mosquito.ngrok-free.app/admin/orders/update/paymentStatus/success",
           failure:
-            "https://defend-nigeria-cord-saint.trycloudflare.com/orders/update/paymentStatus/success",
-          pending:
-            "https://defend-nigeria-cord-saint.trycloudflare.com/orders/update/paymentStatus/success",
+            "https://nearly-touched-mosquito.ngrok-free.app/admin/orders/update/paymentStatus/failure",
         },
         binary_mode: true,
         auto_return: "approved",
@@ -92,11 +100,13 @@ orders.post("/create/preference", async (req, res) => {
   return res.send(newPreference);
 });
 
-orders.post("/update/paymentStatus/success", (req, res) => {
-  console.log(req.params, req.body, req.query, req.headers);
-  db.execute({
-    sql: "update orders set isPaid = ? where preferenceId = ?",
-    args: [true, data.preferenceId],
+orders.get("/getUserOrders/:userId", async (req, res) => {
+  const { userId } = req.params;
+
+  const { rows: orders } = await db.execute({
+    sql: "select * from  orders where userId = ?",
+    args: [userId],
   });
-  res.status(200).redirect("http://localhost:5173/");
+
+  return res.send(orders);
 });
