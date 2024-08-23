@@ -8,14 +8,11 @@ export const admin = Router();
 
 admin.get("/order/:id", async (req, res) => {
   const { id } = req.params;
-  const { rows } = await db.execute({
+  const { rows: order } = await db.execute({
     sql: "select * from orders where id = ?",
     args: [id],
   });
-  return res.status(200).json({
-    message: "Order found successfully",
-    data: rows[0],
-  });
+  return res.status(200).send(...order);
 });
 
 admin.get("/orders", async (_req, res) => {
@@ -27,10 +24,10 @@ admin.get("/orders", async (_req, res) => {
     day < 10 ? `0${day}` : day
   }`;
   const { rows } = await db.execute({
-    sql: "select * from orders where toOrderWithdrawn = ?",
+    sql: "select * from orders where withdrawnOn = ?",
     args: [today],
   });
-  return res.status(200).json({
+  return res.status(200).send({
     message: `All order for today: ${today}`,
     data: rows,
   });
@@ -38,20 +35,38 @@ admin.get("/orders", async (_req, res) => {
 
 admin.get("/orders/all", async (_req, res) => {
   const { rows } = await db.execute("select * from orders");
-  return res.status(200).json({
+  return res.status(200).send({
     message: "All orders found in database here",
     data: rows,
   });
 });
 
-admin.post("/orders/update/paymentStatus", (req, res) => {
-  const data = req.body;
+admin.post("/orders/update/paymentStatus/success", (req, res) => {
+  console.log(req.params, req.body, req.query, req.headers);
+  const { preferenceId, preference_id } = req.params;
   db.execute({
-    sql: "update orders set isPaid = ? where id = ? ",
-    args: [data.isPaid, data.id],
+    sql: "update orders set paid = ? where preferenceId = ?",
+    args: [true, preference_id || preferenceId],
   });
-  res.status(200).json({
-    message: "Payment status updated successfully",
+  res.status(200).redirect("https://nuevaespiga.com");
+});
+
+admin.post("/orders/update/paymentStatus/failure", (req, res) => {
+  console.log(req.params, req.body, req.query, req.headers);
+
+  res.status(200).send({
+    error: "Payment failed",
+  });
+});
+
+admin.post("/orders/update/payment", async (req, res) => {
+  const data = req.body;
+  await db.execute({
+    sql: "update orders set paid = ? where id = ? ",
+    args: [true, data.id],
+  });
+  res.status(200).send({
+    message: "Payment updated successfully",
   });
 });
 
@@ -59,16 +74,15 @@ admin.post("/orders/update/orderWithdrawn", (req, res) => {
   const data = req.body;
   db.execute({
     sql: "update orders set orderWithdrawn = ? where id = ? ",
-    args: [data.orderWithdrawn, data.id],
+    args: [true, data.id],
   });
-  res.status(200).json({
+  res.status(200).send({
     message: "Order withdrawn successfully",
   });
 });
 
 admin.post("/products/create", async (req, res) => {
   const data = req.body;
-  console.log(data);
   // TODO: get path from image, save image, and upload image path to database.
   const imgFile = req.file;
   // Create id for product
@@ -91,7 +105,7 @@ admin.post("/products/create", async (req, res) => {
     sql: "insert into productRate (id, rate, productId) values (?, ?, ?)",
     args: [v1(), null, productID],
   });
-  return res.status(201).json({
+  return res.status(201).send({
     message: "Product created successfully",
   });
 });
@@ -102,7 +116,7 @@ admin.post("/products/update", async (req, res) => {
     sql: "update products set price = ?, stock = ? where id = ?",
     args: [data.price, data.stock, data.productId],
   });
-  return res.status(200).json({
+  return res.status(200).send({
     message: "Product updated successfully",
   });
 });
@@ -114,37 +128,39 @@ admin.delete("/products/:id", async (req, res) => {
     args: [id],
   });
   // TODO -> Delete image from server
-  return res.status(200).json({
+  return res.status(200).send({
     message: "Product deleted successfully",
   });
 });
 
-admin.get("/combos/create", async (req, res) => {
+admin.post("/combos/create", async (req, res) => {
   const data = req.body;
   const imgFile = req.file;
   let id = v1();
-  data.image = relative(__dirname, imgFile.path);
-  await db.execute({
-    sql: "insert into combos (id, title, description, userId, image, price, stock) values (?, ?, ?, ?, ?, ?, ?)",
-    args: [
-      id,
-      data.title,
-      data.description,
-      data.userId,
-      data.image,
-      data.price,
-      data.stock,
-    ],
-  });
-  data.product.map(async (product) => {
+  let imgPath = relative(__dirname, imgFile.path);
+  console.log(data, imgPath);
+  try {
     await db.execute({
-      sql: "insert into comboProducts (comboId, productId) values (?, ?)",
-      args: [id, product.id],
+      sql: "insert into combos (id, title, description, imgPath, price, stock, products) values (?, ?, ?, ?, ?, ?, ?)",
+      args: [
+        id,
+        data.title,
+        data.description,
+        imgPath,
+        data.price,
+        data.stock,
+        JSON.stringify(data.product),
+      ],
     });
-  });
-  res.status(201).json({
-    message: "Combo created successfully",
-  });
+    res.status(201).send({
+      message: "Combo created successfully",
+    });
+  } catch (error) {
+    console.log(error);
+    res.status(500).send({
+      message: error.message,
+    });
+  }
 });
 
 admin.post("/categories/create", (req, res) => {
@@ -160,5 +176,5 @@ admin.post("/categories/create", (req, res) => {
 
 admin.get("/categories", async (_req, res) => {
   const { rows } = await db.execute("select * from categories");
-  return res.send([...rows]);
+  return res.send(rows);
 });
